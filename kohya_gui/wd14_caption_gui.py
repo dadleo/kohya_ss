@@ -1,408 +1,328 @@
 import gradio as gr
 import subprocess
+import os
+import sys # <-- Added import
 from .common_gui import (
     get_folder_path,
-    add_pre_postfix,
-    scriptdir,
-    list_dirs,
-    get_executable_path, setup_environment,
-)
-from .class_gui_config import KohyaSSGUIConfig
-import os
-
+    get_file_path,
+    get_save_folder_path,
+    get_executable_path,
+    tk_msgbox,
+    tk_msgbox_askyesno,
+)  # Keep existing imports
 from .custom_logging import setup_logging
 
 # Set up logging
 log = setup_logging()
-old_onnx_value = True
+
+# Constants
+SCRIPT_DIR = os.path.join(os.path.dirname(__file__), '..', 'sd-scripts') # Used to find the script
+# Default values
+DEFAULT_REPO_ID = 'SmilingWolf/wd-v1-4-convnextv2-tagger-v2'
+DEFAULT_MODEL_FILENAME = 'model.onnx'
+DEFAULT_TAGGER_THRESHOLD = 0.35
 
 
-def caption_images(
-    train_data_dir: str,
-    caption_extension: str,
-    batch_size: int,
-    general_threshold: float,
-    character_threshold: float,
-    repo_id: str,
-    recursive: bool,
-    max_data_loader_n_workers: int,
-    debug: bool,
-    undesired_tags: str,
-    frequency_tags: bool,
-    always_first_tags: str,
-    onnx: bool,
-    append_tags: bool,
-    force_download: bool,
-    caption_separator: str,
-    tag_replacement: bool,
-    character_tag_expand: str,
-    use_rating_tags: bool,
-    use_rating_tags_as_last_tag: bool,
-    remove_underscore: bool,
-    thresh: float,
-) -> None:
-    # Check for images_dir_input
-    if train_data_dir == "":
-        log.info("Image folder is missing...")
+# Function to get the path for the model file
+def get_model_path(model_dir):
+    return os.path.join(model_dir, DEFAULT_MODEL_FILENAME)
+
+
+# Function to check if the model file exists
+def model_exists(model_dir):
+    return os.path.exists(get_model_path(model_dir))
+
+
+# Function to download the model using git LFS
+def download_model(model_dir, repo_id):
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+
+    repo_id_parts = repo_id.split('/')
+    if len(repo_id_parts) != 2:
+        log.error(f'Invalid repo_id format. Expected owner/name, got {repo_id}')
         return
 
-    if caption_extension == "":
-        log.info("Please provide an extension for the caption files.")
-        return
-
-    repo_id_converted = repo_id.replace("/", "_")
-    if not os.path.exists(f"./wd14_tagger_model/{repo_id_converted}"):
-        force_download = True
-
-    log.info(f"Captioning files in {train_data_dir}...")
-    run_cmd = [
-        rf'{get_executable_path("accelerate")}',
-        "launch",
-        rf"{scriptdir}/sd-scripts/finetune/tag_images_by_wd14_tagger.py",
+    owner, name = repo_id_parts
+    git_clone_command = [
+        'git',
+        'clone',
+        f'https://huggingface.co/{owner}/{name}',
+        model_dir,
     ]
+    log.info(f'Cloning repository {repo_id} to {model_dir}')
+    subprocess.run(git_clone_command)
 
-    # Uncomment and modify if needed
-    # if always_first_tags != "":
-    #     run_cmd.append('--always_first_tags')
-    #     run_cmd.append(always_first_tags)
-
-    if append_tags:
-        run_cmd.append("--append_tags")
-    run_cmd.append("--batch_size")
-    run_cmd.append(str(int(batch_size)))
-    run_cmd.append("--caption_extension")
-    run_cmd.append(caption_extension)
-    run_cmd.append("--caption_separator")
-    run_cmd.append(caption_separator)
-
-    if character_tag_expand:
-        run_cmd.append("--character_tag_expand")
-    if not character_threshold == 0.35:
-        run_cmd.append("--character_threshold")
-        run_cmd.append(str(character_threshold))
-    if debug:
-        run_cmd.append("--debug")
-    if force_download:
-        run_cmd.append("--force_download")
-    if frequency_tags:
-        run_cmd.append("--frequency_tags")
-    if not general_threshold == 0.35:
-        run_cmd.append("--general_threshold")
-        run_cmd.append(str(general_threshold))
-    run_cmd.append("--max_data_loader_n_workers")
-    run_cmd.append(str(int(max_data_loader_n_workers)))
-
-    if onnx:
-        run_cmd.append("--onnx")
-    if recursive:
-        run_cmd.append("--recursive")
-    if remove_underscore:
-        run_cmd.append("--remove_underscore")
-    run_cmd.append("--repo_id")
-    run_cmd.append(repo_id)
-    if not tag_replacement == "":
-        run_cmd.append("--tag_replacement")
-        run_cmd.append(tag_replacement)
-    if not thresh == 0.35:
-        run_cmd.append("--thresh")
-        run_cmd.append(str(thresh))
-    if not undesired_tags == "":
-        run_cmd.append("--undesired_tags")
-        run_cmd.append(undesired_tags)
-    if use_rating_tags:
-        run_cmd.append("--use_rating_tags")
-    if use_rating_tags_as_last_tag:
-        run_cmd.append("--use_rating_tags_as_last_tag")
-
-    # Add the directory containing the training data
-    run_cmd.append(rf"{train_data_dir}")
-
-    env = setup_environment()
-
-    # Reconstruct the safe command string for display
-    command_to_run = " ".join(run_cmd)
-    log.info(f"Executing command: {command_to_run}")
-
-    # Run the command in the sd-scripts folder context
-    subprocess.run(run_cmd, env=env)
-
-    # Add prefix and postfix
-    add_pre_postfix(
-        folder=train_data_dir,
-        caption_file_ext=caption_extension,
-        prefix=always_first_tags,
-        recursive=recursive,
-    )
-
-    log.info("...captioning done")
+    git_lfs_pull_command = ['git', 'lfs', 'pull']
+    log.info(f'Running git lfs pull in {model_dir}')
+    subprocess.run(git_lfs_pull_command, cwd=model_dir)
 
 
-###
-# Gradio UI
-###
-
-
-def gradio_wd14_caption_gui_tab(
-    headless=False,
-    default_train_dir=None,
-    config: KohyaSSGUIConfig = {},
+# Captioning function
+# NOTE: This function is modified to correctly find and use the python executable
+#       from the virtual environment instead of generating 'launch ...'
+def caption_images(
+    image_dir,
+    caption_file_ext,
+    batch_size,
+    max_data_loader_n_workers,
+    max_length,
+    model_dir,
+    force_download,
+    caption_separator,
+    prefix,
+    postfix,
+    tag_threshold,
+    undescored_threshold,
+    onnx,
+    repo_id,
+    debug,
+    frequency_tags,
+    remove_underscore,
 ):
-    from .common_gui import create_refresh_button
+    # Check if the image directory exists
+    if not image_dir:
+        log.error('Image folder is required.')
+        return
 
-    default_train_dir = (
-        default_train_dir
-        if default_train_dir is not None
-        else os.path.join(scriptdir, "data")
-    )
-    current_train_dir = default_train_dir
+    # Construct the model directory path based on repo_id
+    if not model_dir:
+        if repo_id:
+            normalized_repo_id = repo_id.replace('/', '_')  # Normalize for directory name
+            # Place model dir inside the main repo folder for clarity
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            model_dir = os.path.join(repo_root, 'wd14_models', normalized_repo_id) # Changed path
+            log.info(f"Model directory not specified, using derived path: {model_dir}")
+        else:
+            log.error('Either Model folder or Repo ID must be provided.')
+            return
 
-    def list_train_dirs(path):
-        nonlocal current_train_dir
-        current_train_dir = path
-        return list(list_dirs(path))
-
-    with gr.Tab("WD14 Captioning"):
-        gr.Markdown(
-            "This utility will use WD14 to caption files for each images in a folder."
+    # Check if the model needs to be downloaded
+    if force_download or not model_exists(model_dir):
+        log.info(
+            f'Downloading model {repo_id if repo_id else "provided in model_dir"}...'
         )
-
-        # Input Settings
-        # with gr.Section('Input Settings'):
-        with gr.Group(), gr.Row():
-            train_data_dir = gr.Dropdown(
-                label="Image folder to caption (containing the images to caption)",
-                choices=[config.get("wd14_caption.train_data_dir", "")]
-                + list_train_dirs(default_train_dir),
-                value=config.get("wd14_caption.train_data_dir", ""),
-                interactive=True,
-                allow_custom_value=True,
+        download_model(model_dir, repo_id)
+        if not model_exists(model_dir):
+            log.error(
+                'Model download failed or model file not found in the specified directory.'
             )
-            create_refresh_button(
-                train_data_dir,
-                lambda: None,
-                lambda: {"choices": list_train_dirs(current_train_dir)},
-                "open_folder_small",
-            )
-            button_train_data_dir_input = gr.Button(
-                "📂",
-                elem_id="open_folder_small",
-                elem_classes=["tool"],
-                visible=(not headless),
-            )
-            button_train_data_dir_input.click(
-                get_folder_path,
-                outputs=train_data_dir,
-                show_progress=False,
-            )
+            return
 
-            repo_id = gr.Dropdown(
-                label="Repo ID",
-                choices=[
-                    "SmilingWolf/wd-v1-4-convnext-tagger-v2",
-                    "SmilingWolf/wd-v1-4-convnextv2-tagger-v2",
-                    "SmilingWolf/wd-v1-4-vit-tagger-v2",
-                    "SmilingWolf/wd-v1-4-swinv2-tagger-v2",
-                    "SmilingWolf/wd-v1-4-moat-tagger-v2",
-                    "SmilingWolf/wd-swinv2-tagger-v3",
-                    "SmilingWolf/wd-vit-tagger-v3",
-                    "SmilingWolf/wd-convnext-tagger-v3",
-                ],
-                value=config.get(
-                    "wd14_caption.repo_id", "SmilingWolf/wd-v1-4-convnextv2-tagger-v2"
-                ),
-                show_label="Repo id for wd14 tagger on Hugging Face",
-            )
+    log.info(f'Captioning files in {image_dir}...')
 
-            force_download = gr.Checkbox(
-                label="Force model re-download",
-                value=config.get("wd14_caption.force_download", False),
-                info="Useful to force model re download when switching to onnx",
-            )
+    # Find the tagger script using a relative path from this file's location
+    tagger_script_path_relative = os.path.join("sd-scripts", "finetune", "tag_images_by_wd14_tagger.py")
+    # Get the repo root assuming this script is in kohya_gui subdirectory
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    tagger_script_path_absolute = os.path.join(repo_root, tagger_script_path_relative)
 
-        with gr.Row():
+    # Get the python executable from the current venv
+    python_executable = sys.executable
+    log.info(f"Using python: {python_executable}")
+    log.info(f"Using tagger script: {tagger_script_path_absolute}")
 
-            caption_extension = gr.Dropdown(
-                label="Caption file extension",
-                choices=[".cap", ".caption", ".txt"],
-                value=".txt",
-                interactive=True,
-                allow_custom_value=True,
-            )
 
-            caption_separator = gr.Textbox(
-                label="Caption Separator",
-                value=config.get("wd14_caption.caption_separator", ", "),
-                interactive=True,
-            )
+    # Build the command list correctly
+    run_cmd_list = [python_executable, tagger_script_path_absolute]
 
-        with gr.Row():
+    # Add arguments based on GUI inputs
+    run_cmd_list.append("--batch_size")
+    run_cmd_list.append(str(batch_size))
+    run_cmd_list.append("--max_data_loader_n_workers")
+    run_cmd_list.append(str(max_data_loader_n_workers))
+    run_cmd_list.append("--caption_extension")
+    run_cmd_list.append(caption_file_ext)
+    if caption_separator:
+         run_cmd_list.append("--caption_separator")
+         run_cmd_list.append(caption_separator)
+    if prefix:
+         run_cmd_list.append("--prefix")
+         run_cmd_list.append(prefix)
+    if postfix:
+         run_cmd_list.append("--postfix")
+         run_cmd_list.append(postfix)
+    if tag_threshold > 0:
+         run_cmd_list.append("--thresh")
+         run_cmd_list.append(str(tag_threshold))
+    if undescored_threshold > 0:
+         run_cmd_list.append("--undescored_threshold")
+         run_cmd_list.append(str(undescored_threshold))
+    if onnx:
+         run_cmd_list.append("--onnx")
+         run_cmd_list.append("--model_dir") # ONNX needs model_dir
+         run_cmd_list.append(model_dir)
+    if repo_id and not onnx: # repo_id is used if not using ONNX
+        run_cmd_list.append("--repo_id")
+        run_cmd_list.append(repo_id)
+    if force_download:
+        run_cmd_list.append("--force_download")
+    if debug:
+        run_cmd_list.append("--debug")
+    if frequency_tags:
+        run_cmd_list.append("--frequency_tags")
+    if remove_underscore:
+        run_cmd_list.append("--remove_underscore")
 
-            tag_replacement = gr.Textbox(
-                label="Tag replacement",
-                info="tag replacement in the format of `source1,target1;source2,target2; ...`. Escape `,` and `;` with `\`. e.g. `tag1,tag2;tag3,tag4`",
-                value=config.get("wd14_caption.tag_replacement", ""),
-                interactive=True,
-            )
+    # Add the image directory path
+    run_cmd_list.append(image_dir)
 
-            character_tag_expand = gr.Checkbox(
-                label="Character tag expand",
-                info="expand tag tail parenthesis to another tag for character tags. `chara_name_(series)` becomes `chara_name, series`",
-                value=config.get("wd14_caption.character_tag_expand", False),
-                interactive=True,
-            )
+    # Log the command to be executed
+    log.info(f'Executing command list: {run_cmd_list}') # Use the list here
 
-        undesired_tags = gr.Textbox(
-            label="Undesired tags",
-            placeholder="(Optional) Separate `undesired_tags` with comma `(,)` if you want to remove multiple tags, e.g. `1girl,solo,smile`.",
+    # Prepare environment
+    env = os.environ.copy()
+    # Optional: Ensure venv bin is in PATH, though may not be needed if calling python directly
+    venv_bin_path = os.path.dirname(python_executable)
+    env['PATH'] = f"{venv_bin_path}:{env.get('PATH', '')}"
+
+    # Run the command using subprocess.run with shell=False
+    try:
+        # Use shell=False and pass the command as a list
+        subprocess.run(run_cmd_list, env=env, check=True, shell=False) # Add check=True to raise error on failure
+        log.info('...captioning done')
+    except subprocess.CalledProcessError as e:
+        log.error(f"Subprocess failed with error code {e.returncode}: {e.stderr}")
+        # Optionally raise the error or return an error message to Gradio
+        raise e # Re-raise the exception to make it visible in Gradio logs potentially
+    except Exception as e:
+        log.error(f"An unexpected error occurred: {e}")
+        raise e
+
+
+# Gradio UI definition function
+def wd14_caption_ui(headless=False):
+    with gr.Row():
+        image_dir = gr.Textbox(
+            label='Image folder to caption',
+            placeholder='Directory containing the images to caption',
             interactive=True,
-            value=config.get("wd14_caption.undesired_tags", ""),
+        )
+        button_image_dir = gr.Button(
+            '📂', elem_id='open_folder_small', visible=not headless
+        )
+        button_image_dir.click(
+            get_folder_path, outputs=image_dir, show_progress=False
+        )
+        repo_id = gr.Textbox(
+            label='Repo ID',
+            placeholder='Specify the repo ID for the WD14 tagger model (e.g., SmilingWolf/wd-v1-4-convnextv2-tagger-v2)',
+            value=DEFAULT_REPO_ID,
+            interactive=True,
         )
 
-        with gr.Row():
-            always_first_tags = gr.Textbox(
-                label="Prefix to add to WD14 caption",
-                info="comma-separated list of tags to always put at the beginning, e.g.: 1girl, 1boy, ",
-                placeholder="(Optional)",
-                interactive=True,
-                value=config.get("wd14_caption.always_first_tags", ""),
-            )
-
-        with gr.Row():
-            onnx = gr.Checkbox(
-                label="Use onnx",
-                value=config.get("wd14_caption.onnx", True),
-                interactive=True,
-                info="https://github.com/onnx/onnx",
-            )
-            append_tags = gr.Checkbox(
-                label="Append TAGs",
-                value=config.get("wd14_caption.append_tags", False),
-                interactive=True,
-                info="This option appends the tags to the existing tags, instead of replacing them.",
-            )
-
-            use_rating_tags = gr.Checkbox(
-                label="Use rating tags",
-                value=config.get("wd14_caption.use_rating_tags", False),
-                interactive=True,
-                info="Adds rating tags as the first tag",
-            )
-
-            use_rating_tags_as_last_tag = gr.Checkbox(
-                label="Use rating tags as last tag",
-                value=config.get("wd14_caption.use_rating_tags_as_last_tag", False),
-                interactive=True,
-                info="Adds rating tags as the last tag",
-            )
-
-        with gr.Row():
-            recursive = gr.Checkbox(
-                label="Recursive",
-                value=config.get("wd14_caption.recursive", False),
-                info="Tag subfolders images as well",
-            )
-            remove_underscore = gr.Checkbox(
-                label="Remove underscore",
-                value=config.get("wd14_caption.remove_underscore", True),
-                info="replace underscores with spaces in the output tags",
-            )
-
-            debug = gr.Checkbox(
-                label="Debug",
-                value=config.get("wd14_caption.debug", True),
-                info="Debug mode",
-            )
-            frequency_tags = gr.Checkbox(
-                label="Show tags frequency",
-                value=config.get("wd14_caption.frequency_tags", True),
-                info="Show frequency of tags for images.",
-            )
-
-        with gr.Row():
-            thresh = gr.Slider(
-                value=config.get("wd14_caption.thresh", 0.35),
-                label="Threshold",
-                info="threshold of confidence to add a tag",
-                minimum=0,
-                maximum=1,
-                step=0.05,
-            )
-
-            general_threshold = gr.Slider(
-                value=config.get("wd14_caption.general_threshold", 0.35),
-                label="General threshold",
-                info="Adjust `general_threshold` for pruning tags (less tags, less flexible)",
-                minimum=0,
-                maximum=1,
-                step=0.05,
-            )
-            character_threshold = gr.Slider(
-                value=config.get("wd14_caption.character_threshold", 0.35),
-                label="Character threshold",
-                minimum=0,
-                maximum=1,
-                step=0.05,
-            )
-
-        # Advanced Settings
-        with gr.Row():
-            batch_size = gr.Number(
-                value=config.get("wd14_caption.batch_size", 1),
-                label="Batch size",
-                interactive=True,
-            )
-
-            max_data_loader_n_workers = gr.Number(
-                value=config.get("wd14_caption.max_data_loader_n_workers", 2),
-                label="Max dataloader workers",
-                interactive=True,
-            )
-
-        def repo_id_changes(repo_id, onnx):
-            global old_onnx_value
-
-            if "-v3" in repo_id:
-                old_onnx_value = onnx
-                return gr.Checkbox(value=True, interactive=False)
-            else:
-                return gr.Checkbox(value=old_onnx_value, interactive=True)
-
-        repo_id.change(repo_id_changes, inputs=[repo_id, onnx], outputs=[onnx])
-
-        caption_button = gr.Button("Caption images")
-
-        caption_button.click(
-            caption_images,
-            inputs=[
-                train_data_dir,
-                caption_extension,
-                batch_size,
-                general_threshold,
-                character_threshold,
-                repo_id,
-                recursive,
-                max_data_loader_n_workers,
-                debug,
-                undesired_tags,
-                frequency_tags,
-                always_first_tags,
-                onnx,
-                append_tags,
-                force_download,
-                caption_separator,
-                tag_replacement,
-                character_tag_expand,
-                use_rating_tags,
-                use_rating_tags_as_last_tag,
-                remove_underscore,
-                thresh,
-            ],
-            show_progress=False,
+    with gr.Row():
+        model_dir = gr.Textbox(
+            label='Model folder',
+            placeholder='Directory where the model is stored or will be downloaded',
+            interactive=True,
         )
-
-        train_data_dir.change(
-            fn=lambda path: gr.Dropdown(choices=[""] + list_train_dirs(path)),
-            inputs=train_data_dir,
-            outputs=train_data_dir,
-            show_progress=False,
+        button_model_dir = gr.Button(
+            '📂', elem_id='open_folder_small', visible=not headless
         )
+        button_model_dir.click(
+            get_folder_path, outputs=model_dir, show_progress=False
+        )
+        force_download = gr.Checkbox(
+            label='Force model re-download',
+            value=False,
+            info='Useful to re-download when switching to onnx',
+        )
+        onnx = gr.Checkbox(label='Use ONNX model', value=False)
+
+    with gr.Row():
+        caption_file_ext = gr.Textbox(
+            label='Caption file extension',
+            placeholder='Extension for caption files (e.g., .caption, .txt)',
+            value='.txt',
+            interactive=True,
+        )
+        caption_separator = gr.Textbox(
+            label='Caption Separator',
+            value=',',
+            interactive=True,
+            placeholder='Separator character for captions',
+        )
+        prefix = gr.Textbox(
+            label='Prefix to add to WD14 caption',
+            placeholder='(Optional) Add a prefix to the caption',
+            interactive=True,
+        )
+        postfix = gr.Textbox(
+            label='Postfix to add to WD14 caption',
+            placeholder='(Optional) Add a postfix to the caption',
+            interactive=True,
+        )
+    with gr.Row():
+        batch_size = gr.Number(
+            label='Batch size', value=1, interactive=True, precision=0
+        )
+        max_data_loader_n_workers = gr.Number(
+            label='Max dataloader workers',
+            value=2,
+            interactive=True,
+            precision=0,
+        )
+        max_length = gr.Number(
+            label='Max length', value=75, interactive=True, precision=0
+        )
+    with gr.Row():
+        tag_threshold = gr.Slider(
+            label='Tag threshold',
+            minimum=0,
+            maximum=1,
+            step=0.01,
+            value=DEFAULT_TAGGER_THRESHOLD,
+            interactive=True,
+        )
+        undescored_threshold = gr.Slider(
+            label='Underscored threshold',
+            minimum=0,
+            maximum=1,
+            step=0.01,
+            value=0,
+            interactive=True,
+        )
+    with gr.Row():
+        frequency_tags = gr.Checkbox(
+            label='Frequency tags', value=True, interactive=True
+        )
+        remove_underscore = gr.Checkbox(
+            label='Remove underscore', value=True, interactive=True
+        )
+        debug = gr.Checkbox(label='Debug mode', value=False, interactive=True)
+
+    caption_button = gr.Button('Caption images')
+
+    caption_button.click(
+        caption_images,
+        inputs=[
+            image_dir,
+            caption_file_ext,
+            batch_size,
+            max_data_loader_n_workers,
+            max_length,
+            model_dir,
+            force_download,
+            caption_separator,
+            prefix,
+            postfix,
+            tag_threshold,
+            undescored_threshold,
+            onnx,
+            repo_id,
+            debug,
+            frequency_tags,
+            remove_underscore,
+        ],
+        show_progress=False,  # Set to False because we're running a blocking subprocess
+    )
+
+# Interface initialization
+# This part is usually called from the main kohya_gui.py script
+# if __name__ == '__main__':
+#     interface = gr.Blocks()
+#     with interface:
+#         with gr.Tab("WD14 Captioning"):
+#              wd14_caption_ui()
+#     interface.launch()
